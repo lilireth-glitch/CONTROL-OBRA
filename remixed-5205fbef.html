@@ -24,16 +24,18 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
 const MONTHS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+const DAYS_SHORT = ["D","L","M","X","J","V","S"];
 const AVATAR_COLORS = ["#d97706","#4ade80","#60a5fa","#f472b6","#a78bfa","#fb923c"];
+
+// 0 = no asistió, 1 = normal, 2 = doble
 const STATUS_CONFIG = {
-  present:    {label:"Presente",  icon:"✓", color:"#4ade80", bg:"#052e16"},
-  absent:     {label:"Ausente",   icon:"✗", color:"#f87171", bg:"#2d0a0a"},
-  late:       {label:"Tarde",     icon:"⏱", color:"#fbbf24", bg:"#2d1b00"},
-  permission: {label:"Permiso",   icon:"📋", color:"#60a5fa", bg:"#0a1628"},
+  0: {label:"No asistió", icon:"0", color:"#f87171", bg:"#2d0a0a"},
+  1: {label:"Normal",     icon:"1", color:"#4ade80", bg:"#052e16"},
+  2: {label:"Doble",      icon:"2", color:"#fbbf24", bg:"#2d1b00"},
 };
 
 let workers = [];
-let records = {};
+let records = {}; // records[date][workerId] = 0|1|2
 let projectName = "Obra Principal";
 let userRole = null;
 let toDeleteId = null;
@@ -50,81 +52,77 @@ async function loadFromDB() {
       records     = data.records     || {};
       projectName = data.projectName || "Obra Principal";
     } else {
-      workers = getDefaultWorkers();
-      records = {};
-      projectName = "Obra Principal";
+      workers = getDefaultWorkers(); records = {}; projectName = "Obra Principal";
       await saveToDB();
     }
   } catch(e) {
-    console.error(e);
     workers = getDefaultWorkers(); records = {}; projectName = "Obra Principal";
-    showToast("Error al conectar con Firebase", "err");
+    showToast("Error al conectar", "err");
   }
 }
 
 async function saveToDB() {
-  showSync('syncing', '☁️ Guardando...');
+  showSync('syncing','☁️ Guardando...');
   try {
-    const workersObj = {};
-    workers.forEach(w => { workersObj[w.id] = w; });
-    await set(ref(db, 'obra'), { workers: workersObj, records, projectName });
-    showSync('saved', '✓ Guardado');
-    setTimeout(() => showSync('hidden', ''), 2000);
+    const wo = {}; workers.forEach(w => { wo[w.id] = w; });
+    await set(ref(db,'obra'), {workers:wo, records, projectName});
+    showSync('saved','✓ Guardado');
+    setTimeout(()=>showSync('hidden',''), 2000);
   } catch(e) {
-    showSync('saved', '⚠️ Error al guardar');
-    setTimeout(() => showSync('hidden', ''), 3000);
+    showSync('saved','⚠️ Error'); setTimeout(()=>showSync('hidden',''), 3000);
   }
 }
 
-function save() {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveToDB, 800);
-}
+function save() { clearTimeout(saveTimer); saveTimer = setTimeout(saveToDB, 800); }
 
-// Escuchar cambios en tiempo real (para que jefa vea lo que registra el capataz)
 function listenRealtime() {
-  onValue(ref(db, 'obra'), (snap) => {
-    if (!snap.exists()) return;
+  onValue(ref(db,'obra'), snap => {
+    if(!snap.exists()) return;
     const data = snap.val();
-    workers     = data.workers     ? Object.values(data.workers) : [];
-    records     = data.records     || {};
+    workers     = data.workers ? Object.values(data.workers) : [];
+    records     = data.records || {};
     projectName = data.projectName || "Obra Principal";
-    const activeView = document.querySelector('.view.active')?.id?.replace('view-','');
-    if (activeView === 'attendance') renderAttendance();
-    if (activeView === 'home')       renderHome();
-    if (activeView === 'workers')    renderWorkers();
-    if (activeView === 'report')     renderReport();
+    const v = document.querySelector('.view.active')?.id?.replace('view-','');
+    if(v==='attendance') renderAttendance();
+    if(v==='home')       renderHome();
+    if(v==='workers')    renderWorkers();
+    if(v==='report')     renderReport();
   });
 }
 
 function showSync(state, msg) {
-  const bar = document.getElementById('sync-bar');
-  bar.className = 'sync-bar ' + state;
-  bar.textContent = msg;
+  const b = document.getElementById('sync-bar');
+  b.className = 'sync-bar '+state; b.textContent = msg;
 }
 
-// ── DEFAULT DATA ──────────────────────────────────────────────────────
 function getDefaultWorkers() {
   return [
-    {id:1, name:"Carlos Mendoza",    role:"Albañil",      phone:""},
-    {id:2, name:"José Ramírez",      role:"Electricista", phone:""},
-    {id:3, name:"Luis Torres",       role:"Tabiquero",    phone:""},
-    {id:4, name:"Miguel Ángel Pérez",role:"Ayudante",     phone:""},
-    {id:5, name:"Fernando García",   role:"Pintor",       phone:""},
+    {id:1, name:"David Ibañez",       role:"Supervisor"},
+    {id:2, name:"Roy Chmoli",         role:"Ayudante"},
+    {id:3, name:"Julian Cañari",      role:"Maestro"},
+    {id:4, name:"Bayon Santibañez",   role:"Jornal"},
+    {id:5, name:"Juan Cornejo",       role:"Maestro"},
   ];
 }
 
 // ── HELPERS ───────────────────────────────────────────────────────────
 function todayStr() { return new Date().toISOString().split('T')[0]; }
 function workerColor(id) { return AVATAR_COLORS[id % AVATAR_COLORS.length]; }
-function pctColor(p) { return p >= 80 ? 'var(--green)' : p >= 50 ? 'var(--yellow)' : 'var(--red)'; }
+function isWeekend(dateStr) { const d = new Date(dateStr+'T12:00:00'); return d.getDay()===0||d.getDay()===6; }
 
 function getDaySummary(date) {
   const day = records[date] || {};
-  const c = {present:0, absent:0, late:0, permission:0, pending:0};
-  workers.forEach(w => { const r = day[w.id]; if(r) c[r.status]++; else c.pending++; });
+  const c = {normal:0, doble:0, ausente:0, pending:0};
+  workers.forEach(w => {
+    const r = day[w.id];
+    if(r===undefined||r===null) c.pending++;
+    else if(r===1) c.normal++;
+    else if(r===2) c.doble++;
+    else c.ausente++;
+  });
   return c;
 }
+
 function getMonthDates(year, month) {
   const days = new Date(year, month+1, 0).getDate();
   return Array.from({length:days}, (_,i) => {
@@ -135,56 +133,51 @@ function getMonthDates(year, month) {
 
 function showToast(msg, type='ok') {
   const t = document.getElementById('toast');
-  t.textContent = msg; t.className = `show ${type}`;
-  setTimeout(() => t.className='', 2500);
+  t.textContent=msg; t.className=`show ${type}`;
+  setTimeout(()=>t.className='', 2500);
 }
 
 // ── LOGIN ─────────────────────────────────────────────────────────────
 window.login = function(role) {
-  if (role === 'jefa') {
+  if(role==='jefa') {
     const pin = prompt('Ingresa el PIN de Jefa de Operaciones:');
-    if (pin !== '1209') {
-      alert('PIN incorrecto.');
-      return;
-    }
+    if(pin!=='1209') { alert('PIN incorrecto.'); return; }
   }
   userRole = role;
-  document.getElementById('login-screen').style.display = 'none';
-  document.getElementById('header').style.display = 'flex';
-  document.getElementById('nav').style.display = 'flex';
+  document.getElementById('login-screen').style.display='none';
+  document.getElementById('header').style.display='flex';
+  document.getElementById('nav').style.display='flex';
   const badge = document.getElementById('role-badge');
-  if (role === 'jefa') {
-    badge.className = 'role-badge role-jefa';
-    badge.textContent = 'JEFA OPS';
-    document.querySelectorAll('.jefa-only').forEach(el => el.style.display = 'flex');
+  if(role==='jefa') {
+    badge.className='role-badge role-jefa'; badge.textContent='JEFA OPS';
+    document.querySelectorAll('.jefa-only').forEach(el=>el.style.display='flex');
   } else {
-    badge.className = 'role-badge role-capataz';
-    badge.textContent = 'SUPERVISOR';
-    document.querySelectorAll('.jefa-only').forEach(el => el.style.display = 'none');
+    badge.className='role-badge role-supervisor'; badge.textContent='SUPERVISOR';
+    document.querySelectorAll('.jefa-only').forEach(el=>el.style.display='none');
   }
   goTo('attendance');
 }
 
 window.logout = function() {
-  userRole = null;
-  document.getElementById('header').style.display = 'none';
-  document.getElementById('nav').style.display = 'none';
-  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  document.getElementById('login-screen').style.display = 'flex';
+  userRole=null;
+  document.getElementById('header').style.display='none';
+  document.getElementById('nav').style.display='none';
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  document.getElementById('login-screen').style.display='flex';
 }
 
 // ── NAVIGATION ────────────────────────────────────────────────────────
 window.goTo = function(view) {
-  if (userRole === 'capataz' && (view==='workers'||view==='addworker'||view==='report')) {
+  if(userRole==='supervisor'&&(view==='workers'||view==='addworker'||view==='report')) {
     showToast('Solo disponible para Jefa de Operaciones','err'); return;
   }
-  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.getElementById('view-'+view).classList.add('active');
-  document.querySelectorAll('.nav-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.view===view || (view==='addworker' && b.dataset.view==='workers'));
+  document.querySelectorAll('.nav-btn').forEach(b=>{
+    b.classList.toggle('active', b.dataset.view===view||(view==='addworker'&&b.dataset.view==='workers'));
   });
-  const titles = {attendance:'Registrar Asistencia', home:'Resumen', workers:'Personal de Obra', addworker:'Nuevo Trabajador', report:'Reporte Mensual'};
-  document.getElementById('header-title').textContent = titles[view] || 'Mi Obra';
+  const titles={attendance:'Registrar Asistencia',home:'Resumen',workers:'Personal de Obra',addworker:'Nuevo Trabajador',report:'Reporte Mensual'};
+  document.getElementById('header-title').textContent=titles[view]||'Mi Obra';
   if(view==='home')       renderHome();
   if(view==='attendance') renderAttendance();
   if(view==='workers')    renderWorkers();
@@ -193,75 +186,68 @@ window.goTo = function(view) {
 
 // ── HOME ──────────────────────────────────────────────────────────────
 function renderHome() {
-  const today = todayStr();
-  const s = getDaySummary(today);
-  const total = workers.length;
-  const pct = total > 0 ? Math.round(((s.present+s.late)/total)*100) : 0;
-  document.getElementById('home-pct').textContent = pct+'%';
-  document.getElementById('home-pct').style.color = pctColor(pct);
-  document.getElementById('home-bar').style.width = pct+'%';
-  document.getElementById('home-bar').style.background = pctColor(pct);
-  document.getElementById('home-date-label').textContent = new Date().toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'});
-  document.getElementById('home-present').textContent    = s.present;
-  document.getElementById('home-absent').textContent     = s.absent;
-  document.getElementById('home-late').textContent       = s.late;
-  document.getElementById('home-permission').textContent = s.permission;
-  document.getElementById('home-pending').textContent    = s.pending;
-  document.getElementById('home-pending').style.color    = s.pending > 0 ? 'var(--yellow)' : 'var(--text3)';
-  document.getElementById('project-name-input').value    = projectName;
-  document.getElementById('home-workers-count').textContent = '👷 '+workers.length+' trabajadores';
-  document.getElementById('home-days-count').textContent    = '📅 '+Object.keys(records).length+' días reg.';
-  document.getElementById('project-name-input').disabled   = userRole === 'capataz';
+  const today=todayStr(), s=getDaySummary(today), total=workers.length;
+  const trabajaron = s.normal+s.doble;
+  const pct = total>0?Math.round((trabajaron/total)*100):0;
+  document.getElementById('home-pct').textContent=pct+'%';
+  document.getElementById('home-pct').style.color=pct>=80?'var(--green)':pct>=50?'var(--yellow)':'var(--red)';
+  document.getElementById('home-bar').style.width=pct+'%';
+  document.getElementById('home-bar').style.background=pct>=80?'var(--green)':pct>=50?'var(--yellow)':'var(--red)';
+  document.getElementById('home-date-label').textContent=new Date().toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'});
+  document.getElementById('home-normal').textContent=s.normal;
+  document.getElementById('home-doble').textContent=s.doble;
+  document.getElementById('home-ausente').textContent=s.ausente;
+  document.getElementById('home-pending').textContent=s.pending;
+  document.getElementById('home-pending').style.color=s.pending>0?'var(--yellow)':'var(--text3)';
+  document.getElementById('project-name-input').value=projectName;
+  document.getElementById('home-workers-count').textContent='👷 '+workers.length+' trabajadores';
+  document.getElementById('home-days-count').textContent='📅 '+Object.keys(records).length+' días reg.';
+  document.getElementById('project-name-input').disabled=userRole==='supervisor';
 }
 
-window.saveProjectName = function() {
-  if(userRole !== 'jefa') return;
-  projectName = document.getElementById('project-name-input').value;
-  document.getElementById('header-title').textContent = projectName || 'Mi Obra';
+window.saveProjectName=function(){
+  if(userRole!=='jefa') return;
+  projectName=document.getElementById('project-name-input').value;
+  document.getElementById('header-title').textContent=projectName||'Mi Obra';
   save();
 }
 
 // ── ATTENDANCE ────────────────────────────────────────────────────────
 function renderAttendance() {
-  const dateEl = document.getElementById('att-date');
-  if (!dateEl.value) dateEl.value = todayStr();
-  if (userRole === 'capataz') {
-    dateEl.value = todayStr();
-    dateEl.disabled = true;
-    dateEl.style.opacity = '0.5';
-  } else {
-    dateEl.disabled = false;
-    dateEl.style.opacity = '1';
-  }
-  const date = dateEl.value;
-  const day = records[date] || {};
-  const s = getDaySummary(date);
-  const total = workers.length;
-  const pct = total > 0 ? Math.round(((s.present+s.late)/total)*100) : 0;
-
-  document.getElementById('att-bar').style.width = pct+'%';
-  document.getElementById('att-bar').style.background = pctColor(pct);
-  document.getElementById('att-pct-big').textContent = pct+'%';
-  document.getElementById('att-pct-big').style.color = pctColor(pct);
-  document.getElementById('att-registered').textContent = (total-s.pending)+' de '+total+' registrados';
-  document.getElementById('att-header').textContent =
+  const dateEl=document.getElementById('att-date');
+  if(!dateEl.value) dateEl.value=todayStr();
+  if(userRole==='supervisor'){ dateEl.value=todayStr(); dateEl.disabled=true; dateEl.style.opacity='0.5'; }
+  else { dateEl.disabled=false; dateEl.style.opacity='1'; }
+  const date=dateEl.value, day=records[date]||{}, s=getDaySummary(date), total=workers.length;
+  const trabajaron=s.normal+s.doble;
+  const pct=total>0?Math.round((trabajaron/total)*100):0;
+  document.getElementById('att-bar').style.width=pct+'%';
+  document.getElementById('att-bar').style.background=pct>=80?'var(--green)':pct>=50?'var(--yellow)':'var(--red)';
+  document.getElementById('att-pct-big').textContent=pct+'%';
+  document.getElementById('att-pct-big').style.color=pct>=80?'var(--green)':pct>=50?'var(--yellow)':'var(--red)';
+  document.getElementById('att-registered').textContent=(total-s.pending)+' de '+total+' registrados';
+  document.getElementById('att-header').textContent=
     `${total-s.pending===total&&total>0?'✓':'⏳'} ${new Date(date+'T12:00:00').toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'})}`;
 
-  const list = document.getElementById('att-list');
-  if (!workers.length) {
-    list.innerHTML = `<div class="empty-msg">Sin trabajadores.<br><span style="font-size:12px">La Jefa de Operaciones debe agregar el personal primero.</span></div>`;
+  const list=document.getElementById('att-list');
+  if(!workers.length){
+    list.innerHTML=`<div class="empty-msg">Sin trabajadores.<br><span style="font-size:12px">La Jefa de Operaciones debe agregar el personal.</span></div>`;
     return;
   }
-  list.innerHTML = workers.map(w => {
-    const rec = day[w.id];
-    const color = workerColor(w.id);
-    const btns = Object.entries(STATUS_CONFIG).map(([key,sc]) =>
-      `<button class="status-btn ${rec && rec.status===key ? 'active-'+key : ''}"
-        onclick="setStatus(${w.id},'${key}')" title="${sc.label}">
-        <span style="font-size:20px">${sc.icon}</span>
-      </button>`
-    ).join('');
-    const chip = rec ? `<div class="status-chip" style="color:${STATUS_CONFIG[rec.status].color};background:${STATUS_CONFIG[rec.status].bg}">${STATUS_CONFIG[rec.status].icon} ${STATUS_CONFIG[rec.status].label} · ${rec.time}</div>` : '';
+  list.innerHTML=workers.map(w=>{
+    const val=day[w.id]; // 0, 1, 2 o undefined
+    const color=workerColor(w.id);
+    const btns=Object.entries(STATUS_CONFIG).map(([key,sc])=>{
+      const k=parseInt(key);
+      const isActive=val===k;
+      return `<button class="status-btn-3 ${isActive?'active-s'+k:''}"
+        onclick="setStatus(${w.id},${k})" title="${sc.label}">
+        <span style="font-size:22px;font-weight:900">${sc.icon}</span>
+        <span class="btn-lbl3">${sc.label}</span>
+      </button>`;
+    }).join('');
+    const chip = val!==undefined
+      ? `<div class="status-chip" style="color:${STATUS_CONFIG[val].color};background:${STATUS_CONFIG[val].bg}">${STATUS_CONFIG[val].icon} ${STATUS_CONFIG[val].label}</div>` : '';
     return `<div class="worker-row">
       <div class="avatar" style="background:${color}22;border-color:${color};color:${color}">${w.name.charAt(0)}</div>
       <div class="worker-info">
@@ -269,43 +255,35 @@ function renderAttendance() {
         <div class="worker-role-tag">${w.role}</div>
         ${chip}
       </div>
-      <div class="status-btns">${btns}</div>
+      <div class="status-btns-3">${btns}</div>
     </div>`;
   }).join('');
 }
 
-window.setStatus = function(workerId, status) {
-  const date = document.getElementById('att-date').value || todayStr();
-  if (!records[date]) records[date] = {};
-  records[date][workerId] = {
-    status,
-    time: new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})
-  };
-  save();
-  renderAttendance();
-  showToast(STATUS_CONFIG[status].label + ' ✓');
+window.setStatus=function(workerId, val){
+  const date=document.getElementById('att-date').value||todayStr();
+  if(!records[date]) records[date]={};
+  records[date][workerId]=val;
+  save(); renderAttendance();
+  showToast(STATUS_CONFIG[val].label+' ✓');
 }
-
-window.attDateChanged = function() { renderAttendance(); }
+window.attDateChanged=function(){ renderAttendance(); }
 
 // ── WORKERS ───────────────────────────────────────────────────────────
-function renderWorkers() {
-  const search = (document.getElementById('worker-search').value||'').toLowerCase();
-  const roles = ['Todos',...new Set(workers.map(w=>w.role))];
-  document.getElementById('role-filters').innerHTML = roles.map(r =>
+function renderWorkers(){
+  const search=(document.getElementById('worker-search').value||'').toLowerCase();
+  const roles=['Todos',...new Set(workers.map(w=>w.role))];
+  document.getElementById('role-filters').innerHTML=roles.map(r=>
     `<button class="chip ${filterRole===r?'active':''}" onclick="setFilter('${r}')">${r}</button>`
   ).join('');
-  const filtered = workers.filter(w =>
-    (filterRole==='Todos'||w.role===filterRole) && w.name.toLowerCase().includes(search)
-  );
-  const today = todayStr();
-  const list = document.getElementById('workers-list');
-  if (!filtered.length) { list.innerHTML='<div class="empty-msg">No se encontraron trabajadores.</div>'; return; }
-  list.innerHTML = filtered.map(w => {
-    const color = workerColor(w.id);
-    const todayRec = records[today]?.[w.id];
-    const todayTag = todayRec
-      ? `<div class="status-chip" style="color:${STATUS_CONFIG[todayRec.status].color};background:${STATUS_CONFIG[todayRec.status].bg}">${STATUS_CONFIG[todayRec.status].icon} Hoy</div>` : '';
+  const filtered=workers.filter(w=>(filterRole==='Todos'||w.role===filterRole)&&w.name.toLowerCase().includes(search));
+  const today=todayStr(), list=document.getElementById('workers-list');
+  if(!filtered.length){list.innerHTML='<div class="empty-msg">No se encontraron trabajadores.</div>';return;}
+  list.innerHTML=filtered.map(w=>{
+    const color=workerColor(w.id);
+    const v=records[today]?.[w.id];
+    const todayTag=v!==undefined
+      ?`<div class="status-chip" style="color:${STATUS_CONFIG[v].color};background:${STATUS_CONFIG[v].bg}">${STATUS_CONFIG[v].icon} Hoy</div>`:'';
     return `<div class="worker-row">
       <div class="avatar" style="background:${color}22;border-color:${color};color:${color}">${w.name.charAt(0)}</div>
       <div class="worker-info">
@@ -318,36 +296,31 @@ function renderWorkers() {
     </div>`;
   }).join('');
 }
+window.setFilter=function(r){filterRole=r;renderWorkers();}
+window.renderWorkers=renderWorkers;
 
-window.setFilter = function(role) { filterRole=role; renderWorkers(); }
-window.renderWorkers = renderWorkers;
-
-window.addWorker = function() {
-  const name  = document.getElementById('new-name').value.trim();
-  const role  = document.getElementById('new-role').value.trim();
-  const phone = document.getElementById('new-phone').value.trim();
-  if(!name||!role){ showToast('Nombre y cargo son requeridos','err'); return; }
-  workers.push({id: Date.now(), name, role, phone});
+window.addWorker=function(){
+  const name=document.getElementById('new-name').value.trim();
+  const role=document.getElementById('new-role').value.trim();
+  const phone=document.getElementById('new-phone').value.trim();
+  if(!name||!role){showToast('Nombre y cargo son requeridos','err');return;}
+  workers.push({id:Date.now(),name,role,phone});
   document.getElementById('new-name').value='';
   document.getElementById('new-role').value='';
   document.getElementById('new-phone').value='';
-  save(); showToast('Trabajador agregado ✓'); goTo('workers');
+  save();showToast('Trabajador agregado ✓');goTo('workers');
 }
-
-window.openDeleteModal = function(id, name) {
-  toDeleteId = id;
-  document.getElementById('modal-worker-name').textContent = `¿Eliminar a ${name}? Esta acción no se puede deshacer.`;
-  document.getElementById('modal-delete').style.display = 'flex';
+window.openDeleteModal=function(id,name){
+  toDeleteId=id;
+  document.getElementById('modal-worker-name').textContent=`¿Eliminar a ${name}?`;
+  document.getElementById('modal-delete').style.display='flex';
 }
-window.closeModal = function() { document.getElementById('modal-delete').style.display='none'; toDeleteId=null; }
-window.confirmDelete = function() {
-  workers = workers.filter(w => w.id !== toDeleteId);
-  save(); closeModal(); showToast('Eliminado','err'); renderWorkers();
-}
+window.closeModal=function(){document.getElementById('modal-delete').style.display='none';toDeleteId=null;}
+window.confirmDelete=function(){workers=workers.filter(w=>w.id!==toDeleteId);save();closeModal();showToast('Eliminado','err');renderWorkers();}
 
 // ── REPORT ────────────────────────────────────────────────────────────
-function initReportSelectors() {
-  const now=new Date(), mSel=document.getElementById('report-month'), ySel=document.getElementById('report-year');
+function initReportSelectors(){
+  const now=new Date(),mSel=document.getElementById('report-month'),ySel=document.getElementById('report-year');
   if(mSel.options.length===0){
     MONTHS.forEach((m,i)=>{const o=document.createElement('option');o.value=i;o.textContent=m;mSel.appendChild(o);});
     mSel.value=now.getMonth();
@@ -356,124 +329,137 @@ function initReportSelectors() {
   }
 }
 
-function renderReport() {
+function renderReport(){
   initReportSelectors();
   const month=parseInt(document.getElementById('report-month').value);
   const year=parseInt(document.getElementById('report-year').value);
   const monthDates=getMonthDates(year,month);
   const withRec=monthDates.filter(d=>records[d]);
-  let tp=0,tt=0,ta=0,tpe=0;
-  withRec.forEach(d=>{const s=getDaySummary(d);tp+=s.present;tt+=s.late;ta+=s.absent;tpe+=s.permission;});
-  const totReg=tp+tt+ta+tpe;
-  const pctMes=totReg>0?Math.round(((tp+tt)/totReg)*100):0;
+  let tn=0,td=0,ta=0;
+  withRec.forEach(d=>{const s=getDaySummary(d);tn+=s.normal;td+=s.doble;ta+=s.ausente;});
+  const tot=tn+td+ta;
+  const pct=tot>0?Math.round(((tn+td)/tot)*100):0;
   document.getElementById('report-card-title').textContent=`📅 ${MONTHS[month]} ${year}`;
-  document.getElementById('report-pct').textContent=pctMes+'%';
-  document.getElementById('report-pct').style.color=pctColor(pctMes);
-  document.getElementById('report-bar').style.width=pctMes+'%';
-  document.getElementById('report-bar').style.background=pctColor(pctMes);
+  document.getElementById('report-pct').textContent=pct+'%';
+  document.getElementById('report-pct').style.color=pct>=80?'var(--green)':pct>=50?'var(--yellow)':'var(--red)';
+  document.getElementById('report-bar').style.width=pct+'%';
+  document.getElementById('report-bar').style.background=pct>=80?'var(--green)':pct>=50?'var(--yellow)':'var(--red)';
   document.getElementById('report-days-label').textContent=`${withRec.length} / ${monthDates.length} días registrados`;
-  document.getElementById('rep-present').textContent=tp;
-  document.getElementById('rep-late').textContent=tt;
-  document.getElementById('rep-absent').textContent=ta;
-  document.getElementById('rep-permission').textContent=tpe;
+  document.getElementById('rep-normal').textContent=tn;
+  document.getElementById('rep-doble').textContent=td;
+  document.getElementById('rep-ausente').textContent=ta;
   document.getElementById('report-dl-btn').textContent=`⬇ Descargar Excel — ${MONTHS[month]} ${year}`;
 
   if(withRec.length>0){
     document.getElementById('report-by-worker').innerHTML=
       '<div class="section-title">Por trabajador</div><div class="card">'+
       workers.map(w=>{
-        let wp=0,wt=0,wa=0,wpe=0;
-        withRec.forEach(d=>{const r=records[d]?.[w.id];if(r){if(r.status==='present')wp++;else if(r.status==='late')wt++;else if(r.status==='absent')wa++;else wpe++;}});
-        const wTot=wp+wt+wa+wpe;
-        const wPct=wTot>0?Math.round(((wp+wt)/wTot)*100):null;
+        let wn=0,wd=0,wa=0;
+        withRec.forEach(d=>{const v=records[d]?.[w.id];if(v===1)wn++;else if(v===2)wd++;else if(v===0)wa++;});
+        const wTot=wn+wd+wa;
+        const wPct=wTot>0?Math.round(((wn+wd)/wTot)*100):null;
         const color=workerColor(w.id);
         return `<div class="worker-row">
           <div class="avatar" style="background:${color}22;border-color:${color};color:${color}">${w.name.charAt(0)}</div>
           <div class="worker-info">
             <div class="worker-name">${w.name}</div>
             <div class="worker-role-tag">${w.role}</div>
-            ${wTot>0?`<div style="font-size:10px;color:var(--text3)">✓${wp} ⏱${wt} ✗${wa} 📋${wpe}</div>`:''}
+            ${wTot>0?`<div style="font-size:10px;color:var(--text3)">1:${wn} &nbsp;2:${wd} &nbsp;0:${wa}</div>`:''}
           </div>
-          ${wPct!==null?`<div style="font-size:22px;font-weight:900;color:${pctColor(wPct)};flex-shrink:0">${wPct}%</div>`:'<div style="font-size:11px;color:var(--text3)">Sin datos</div>'}
+          ${wPct!==null?`<div style="font-size:22px;font-weight:900;color:${wPct>=80?'var(--green)':wPct>=50?'var(--yellow)':'var(--red)'};flex-shrink:0">${wPct}%</div>`:'<div style="font-size:11px;color:var(--text3)">Sin datos</div>'}
         </div>`;
       }).join('')+'</div>';
-    document.getElementById('report-days-list').innerHTML=
-      '<div class="section-title">Días registrados</div>'+
-      withRec.map(date=>{
-        const s=getDaySummary(date);
-        const pct=workers.length>0?Math.round(((s.present+s.late)/workers.length)*100):0;
-        const label=new Date(date+'T12:00:00').toLocaleDateString('es-ES',{weekday:'short',day:'numeric',month:'short'});
-        return `<div class="day-card"><div class="day-card-inner">
-          <div><div style="font-size:13px;font-weight:700">${label}</div>
-          <div style="font-size:11px;color:var(--text3)">✓${s.present} ✗${s.absent} ⏱${s.late} 📋${s.permission}</div></div>
-          <div style="font-size:22px;font-weight:900;color:${pctColor(pct)}">${pct}%</div>
-        </div></div>`;
-      }).join('');
   } else {
     document.getElementById('report-by-worker').innerHTML=`<div class="empty-msg">Sin registros en ${MONTHS[month]} ${year}.</div>`;
-    document.getElementById('report-days-list').innerHTML='';
   }
 }
+window.renderReport=renderReport;
 
-window.renderReport = renderReport;
-
-// ── EXCEL ─────────────────────────────────────────────────────────────
-window.downloadExcel = function() {
+// ── EXCEL (formato Techint) ───────────────────────────────────────────
+window.downloadExcel=function(){
   const month=parseInt(document.getElementById('report-month').value);
   const year=parseInt(document.getElementById('report-year').value);
   const monthDates=getMonthDates(year,month);
-  const withRec=monthDates.filter(d=>records[d]);
+  const daysInMonth=monthDates.length;
+
   const wb=XLSX.utils.book_new();
-  const ws1=[];
-  ws1.push([`REPORTE DE ASISTENCIA — ${MONTHS[month].toUpperCase()} ${year}`]);
-  ws1.push([`Proyecto: ${projectName}`]);
-  ws1.push([`Generado: ${new Date().toLocaleDateString('es-ES')}`]);
-  ws1.push([]);
-  const header=['N°','Nombre','Cargo'];
-  withRec.forEach(d=>header.push(new Date(d+'T12:00:00').toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit'})));
-  header.push('P','T','A','PE','%');
-  ws1.push(header);
-  workers.forEach((w,i)=>{
-    const row=[i+1,w.name,w.role];
-    let p=0,t=0,a=0,pe=0;
-    withRec.forEach(d=>{const r=records[d]?.[w.id];if(r){if(r.status==='present'){row.push('P');p++;}else if(r.status==='late'){row.push('T');t++;}else if(r.status==='absent'){row.push('A');a++;}else{row.push('PE');pe++;}}else row.push('-');});
-    const tot=p+t+a+pe;
-    row.push(p,t,a,pe,tot>0?Math.round(((p+t)/tot)*100)+'%':'—');
-    ws1.push(row);
-  });
-  ws1.push([]);
-  ws1.push(['','LEYENDA:','P=Presente','T=Tardanza','A=Ausente','PE=Permiso']);
-  const s1=XLSX.utils.aoa_to_sheet(ws1);
-  s1['!cols']=[{wch:4},{wch:24},{wch:14},...withRec.map(()=>({wch:5})),{wch:5},{wch:5},{wch:5},{wch:5},{wch:8}];
-  XLSX.utils.book_append_sheet(wb,s1,'Asistencia Diaria');
+  const ws=[];
 
-  const ws2=[];
-  ws2.push([`RESUMEN POR TRABAJADOR — ${MONTHS[month].toUpperCase()} ${year}`]);
-  ws2.push([`Proyecto: ${projectName}`]);
-  ws2.push([]);
-  ws2.push(['N°','Nombre','Cargo','Presentes','Tardanzas','Ausentes','Permisos','% Asistencia']);
-  workers.forEach((w,i)=>{
-    let wp=0,wt=0,wa=0,wpe=0;
-    withRec.forEach(d=>{const r=records[d]?.[w.id];if(r){if(r.status==='present')wp++;else if(r.status==='late')wt++;else if(r.status==='absent')wa++;else wpe++;}});
-    const wTot=wp+wt+wa+wpe;
-    ws2.push([i+1,w.name,w.role,wp,wt,wa,wpe,wTot>0?Math.round(((wp+wt)/wTot)*100)+'%':'—']);
-  });
-  const s2=XLSX.utils.aoa_to_sheet(ws2);
-  s2['!cols']=[{wch:4},{wch:24},{wch:14},{wch:11},{wch:11},{wch:11},{wch:11},{wch:13}];
-  XLSX.utils.book_append_sheet(wb,s2,'Resumen por Trabajador');
+  // Fila 1: Título
+  ws.push([`CONTROL DE ASISTENCIA — ${projectName.toUpperCase()} — ${MONTHS[month].toUpperCase()} ${year}`]);
+  ws.push(['Jornada normal: 8h 24min diarias · 0 = No asistió / Descanso · 1 = Normal · 2 = Doble']);
+  ws.push([]);
 
+  // Fila encabezado días
+  const headerRow=['N°','NOMBRE','CARGO'];
+  monthDates.forEach(d=>{
+    const dd=new Date(d+'T12:00:00');
+    headerRow.push(DAYS_SHORT[dd.getDay()]+'\n'+dd.getDate());
+  });
+  headerRow.push('DÍAS HAB.\nTRAB.','DÍAS NO HAB.\nTRAB.','TOTAL\nASISTENCIAS');
+  ws.push(headerRow);
+
+  // Filas trabajadores
+  workers.forEach((w,i)=>{
+    const row=[i+1, w.name, w.role];
+    let diasHab=0, diasNoHab=0;
+    monthDates.forEach(d=>{
+      const v=records[d]?.[w.id];
+      const val=(v===1||v===2)?v:0;
+      row.push(val);
+      if(val>0){
+        if(isWeekend(d)) diasNoHab+=val===2?2:1;
+        else diasHab+=val===2?2:1;
+      }
+    });
+    row.push(diasHab, diasNoHab, diasHab+diasNoHab);
+    ws.push(row);
+  });
+
+  // Fila totales
+  const totRow=['','TOTALES DEL MES',''];
+  monthDates.forEach(d=>{
+    let t=0;
+    workers.forEach(w=>{const v=records[d]?.[w.id];if(v===1||v===2)t+=v;});
+    totRow.push(t||0);
+  });
+  let thab=0,tnhab=0;
+  workers.forEach(w=>{
+    monthDates.forEach(d=>{
+      const v=records[d]?.[w.id];
+      if(v===1||v===2){
+        if(isWeekend(d)) tnhab+=v===2?2:1;
+        else thab+=v===2?2:1;
+      }
+    });
+  });
+  totRow.push(thab,tnhab,thab+tnhab);
+  ws.push([]);
+  ws.push(totRow);
+  ws.push([]);
+  ws.push(['LEYENDA:','0 = No asistió','1 = Asistencia normal','2 = Turno doble']);
+
+  const sheet=XLSX.utils.aoa_to_sheet(ws);
+
+  // Anchos de columna
+  const cols=[{wch:4},{wch:22},{wch:14}];
+  monthDates.forEach(()=>cols.push({wch:4}));
+  cols.push({wch:12},{wch:14},{wch:13});
+  sheet['!cols']=cols;
+
+  XLSX.utils.book_append_sheet(wb,sheet,'Asistencia');
   XLSX.writeFile(wb,`Asistencia_${projectName.replace(/ /g,'_')}_${MONTHS[month]}_${year}.xlsx`);
   showToast('📥 Excel descargado');
 }
 
 // ── INIT ──────────────────────────────────────────────────────────────
-async function init() {
+async function init(){
   await loadFromDB();
   listenRealtime();
   document.getElementById('loading-screen').style.display='none';
   document.getElementById('login-screen').style.display='flex';
   initReportSelectors();
-  document.getElementById('att-date').value = todayStr();
+  document.getElementById('att-date').value=todayStr();
 }
 init();
 </script>
@@ -494,14 +480,14 @@ body{font-family:'Barlow Condensed','Arial Narrow',Arial,sans-serif;background:v
 .logo-sub{font-size:11px;color:var(--amber-dark);letter-spacing:2px;text-transform:uppercase}
 .role-badge{font-size:11px;padding:4px 10px;border-radius:20px;font-weight:700;letter-spacing:1px}
 .role-jefa{background:var(--amber-bg);color:var(--amber-light);border:1px solid var(--amber-dark)}
-.role-capataz{background:var(--blue-bg);color:var(--blue);border:1px solid #1e3a5f}
+.role-supervisor{background:var(--blue-bg);color:var(--blue);border:1px solid #1e3a5f}
 #nav{display:flex;background:#111;border-top:1px solid var(--border);position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;z-index:100}
 .nav-btn{flex:1;padding:10px 4px 8px;background:transparent;border:none;border-top:3px solid transparent;color:var(--text3);cursor:pointer;font-size:10px;letter-spacing:1px;text-transform:uppercase;font-family:inherit;display:flex;flex-direction:column;align-items:center;gap:2px;transition:all .15s}
 .nav-btn.active{background:#1a1208;border-top-color:var(--amber);color:var(--amber-light)}
 .content{padding:16px 14px 84px}
 .card{background:var(--bg2);border-radius:8px;border:1px solid var(--border);margin-bottom:12px;overflow:hidden}
 .card-header{background:var(--bg3);padding:10px 14px;font-size:13px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--amber);border-bottom:1px solid var(--border)}
-.stat-row{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:1px;background:#111}
+.stat-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:#111}
 .stat-cell{padding:10px 6px;text-align:center}
 .stat-num{font-size:28px;font-weight:900;line-height:1}
 .stat-label{font-size:9px;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-top:2px}
@@ -511,12 +497,13 @@ body{font-family:'Barlow Condensed','Arial Narrow',Arial,sans-serif;background:v
 .worker-row{display:flex;align-items:center;padding:14px;border-bottom:1px solid #222;gap:10px}
 .worker-row:last-child{border-bottom:none}
 .avatar{width:40px;height:40px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700;flex-shrink:0;border-width:2px;border-style:solid}
-.status-btns{display:grid;grid-template-columns:1fr 1fr;gap:5px;flex-shrink:0}
+.status-btns-3{display:flex;gap:5px;flex-shrink:0}
+.status-btn-3{width:52px;height:52px;border-radius:8px;border:2px solid #333;background:var(--bg2);color:#444;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:all .12s;font-family:inherit;gap:1px}
+.btn-lbl3{font-size:8px;letter-spacing:.3px;font-weight:700;text-align:center;line-height:1}
+.active-s0{border-color:#f87171;background:#2d0a0a;color:#f87171}
+.active-s1{border-color:#4ade80;background:#052e16;color:#4ade80}
+.active-s2{border-color:#fbbf24;background:#2d1b00;color:#fbbf24}
 .status-btn{width:44px;height:44px;border-radius:6px;border:2px solid #333;background:var(--bg2);color:#444;cursor:pointer;font-size:18px;display:flex;align-items:center;justify-content:center;transition:all .12s;font-family:inherit}
-.status-btn.active-present{border-color:var(--green);background:var(--green-bg);color:var(--green)}
-.status-btn.active-absent{border-color:var(--red);background:var(--red-bg);color:var(--red)}
-.status-btn.active-late{border-color:var(--yellow);background:var(--yellow-bg);color:var(--yellow)}
-.status-btn.active-permission{border-color:var(--blue);background:var(--blue-bg);color:var(--blue)}
 .btn{display:block;width:100%;padding:13px 18px;border-radius:8px;border:none;font-family:inherit;font-size:14px;font-weight:700;letter-spacing:1px;text-transform:uppercase;cursor:pointer;margin-bottom:8px}
 .btn-primary{background:var(--amber);color:#0d0d0d}
 .btn-excel{background:#14532d;color:#bbf7d0}
@@ -533,12 +520,9 @@ select{cursor:pointer;padding:10px;width:auto;margin-bottom:0}
 .chip{padding:6px 14px;border-radius:20px;border:1px solid #333;background:var(--bg2);color:var(--text3);font-size:12px;cursor:pointer;white-space:nowrap;font-family:inherit}
 .chip.active{border-color:var(--amber);background:var(--amber-bg);color:var(--amber-light)}
 .empty-msg{padding:32px 20px;text-align:center;color:var(--text3);font-size:13px;line-height:1.6}
-.view{display:none}
-.view.active{display:block}
+.view{display:none}.view.active{display:block}
 .month-row{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
 .excel-btn-sm{width:auto;padding:9px 16px;margin-bottom:0;flex-shrink:0}
-.day-card{background:var(--bg2);border-radius:6px;border:1px solid var(--border);margin-bottom:8px}
-.day-card-inner{padding:10px 14px;display:flex;justify-content:space-between;align-items:center}
 .worker-info{flex:1;min-width:0}
 .worker-name{font-size:16px;font-weight:700;color:var(--text);line-height:1.2}
 .worker-role-tag{font-size:12px;color:var(--text3)}
@@ -561,30 +545,24 @@ select{cursor:pointer;padding:10px;width:auto;margin-bottom:0}
 .login-sub{font-size:13px;color:var(--text3);margin-bottom:40px;letter-spacing:1px}
 .login-btn{width:100%;padding:18px;border-radius:10px;border:none;font-family:inherit;font-size:16px;font-weight:700;letter-spacing:1px;cursor:pointer;margin-bottom:14px;text-transform:uppercase}
 .login-jefa{background:var(--amber);color:#0d0d0d}
-.login-capataz{background:var(--blue-bg);color:var(--blue);border:2px solid #1e3a5f}
+.login-supervisor{background:var(--blue-bg);color:var(--blue);border:2px solid #1e3a5f}
 #loading-screen{position:fixed;inset:0;background:var(--bg);z-index:400;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px}
 .spinner{width:44px;height:44px;border:3px solid #333;border-top-color:var(--amber);border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 </style>
 
-<!-- LOADING -->
-<div id="loading-screen">
-  <div class="spinner"></div>
-  <div style="font-size:13px;color:var(--text3);letter-spacing:2px">CONECTANDO...</div>
-</div>
+<div id="loading-screen"><div class="spinner"></div><div style="font-size:13px;color:var(--text3);letter-spacing:2px">CONECTANDO...</div></div>
 
-<!-- LOGIN -->
 <div id="login-screen" style="display:none">
   <div class="login-logo">🏗️</div>
   <div class="login-title">CONTROL OBRA</div>
   <div class="login-sub">¿Quién eres?</div>
   <button class="login-btn login-jefa" onclick="login('jefa')">👷‍♀️ Jefa de Operaciones</button>
-  <button class="login-btn login-capataz" onclick="login('capataz')">🦺 Supervisor</button>
+  <button class="login-btn login-supervisor" onclick="login('supervisor')">🦺 Supervisor</button>
 </div>
 
 <div class="sync-bar hidden" id="sync-bar"></div>
 
-<!-- HEADER -->
 <div id="header" style="display:none">
   <div class="logo">
     <div class="logo-icon">🏗️</div>
@@ -593,10 +571,9 @@ select{cursor:pointer;padding:10px;width:auto;margin-bottom:0}
       <div class="logo-sub">Asistencia</div>
     </div>
   </div>
-  <div id="role-badge" class="role-badge role-capataz">CAPATAZ</div>
+  <div id="role-badge" class="role-badge role-supervisor">SUPERVISOR</div>
 </div>
 
-<!-- VIEWS -->
 <div id="view-attendance" class="view content">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
     <div>
@@ -629,10 +606,9 @@ select{cursor:pointer;padding:10px;width:auto;margin-bottom:0}
       <div class="pct-bar"><div class="pct-fill" id="home-bar" style="width:0%"></div></div>
     </div>
     <div class="stat-row">
-      <div class="stat-cell" style="background:var(--green-bg)"><div class="stat-num" style="color:var(--green)" id="home-present">0</div><div class="stat-label">Presente</div></div>
-      <div class="stat-cell" style="background:var(--red-bg)"><div class="stat-num" style="color:var(--red)" id="home-absent">0</div><div class="stat-label">Ausente</div></div>
-      <div class="stat-cell" style="background:var(--yellow-bg)"><div class="stat-num" style="color:var(--yellow)" id="home-late">0</div><div class="stat-label">Tardanza</div></div>
-      <div class="stat-cell" style="background:var(--blue-bg)"><div class="stat-num" style="color:var(--blue)" id="home-permission">0</div><div class="stat-label">Permiso</div></div>
+      <div class="stat-cell" style="background:var(--green-bg)"><div class="stat-num" style="color:var(--green)" id="home-normal">0</div><div class="stat-label">Normal</div></div>
+      <div class="stat-cell" style="background:var(--yellow-bg)"><div class="stat-num" style="color:var(--yellow)" id="home-doble">0</div><div class="stat-label">Doble</div></div>
+      <div class="stat-cell" style="background:var(--red-bg)"><div class="stat-num" style="color:var(--red)" id="home-ausente">0</div><div class="stat-label">Ausente</div></div>
     </div>
     <div style="padding:8px 14px;border-top:1px solid #222" class="row-between">
       <span style="font-size:11px;color:var(--text3)">Sin registrar</span>
@@ -669,7 +645,7 @@ select{cursor:pointer;padding:10px;width:auto;margin-bottom:0}
       <label class="form-label">Nombre completo *</label>
       <input type="text" id="new-name" placeholder="Ej: Juan Pérez">
       <label class="form-label">Cargo / Especialidad *</label>
-      <input type="text" id="new-role" placeholder="Ej: Tabiquero, Pintor...">
+      <input type="text" id="new-role" placeholder="Ej: Maestro, Ayudante...">
       <label class="form-label">Teléfono (opcional)</label>
       <input type="tel" id="new-phone" placeholder="+56 9 ...">
       <button class="btn btn-primary" onclick="addWorker()">Agregar trabajador</button>
@@ -697,18 +673,15 @@ select{cursor:pointer;padding:10px;width:auto;margin-bottom:0}
       <div class="pct-bar"><div class="pct-fill" id="report-bar" style="width:0%"></div></div>
     </div>
     <div class="stat-row">
-      <div class="stat-cell" style="background:var(--green-bg)"><div class="stat-num" style="color:var(--green)" id="rep-present">0</div><div class="stat-label">Presentes</div></div>
-      <div class="stat-cell" style="background:var(--yellow-bg)"><div class="stat-num" style="color:var(--yellow)" id="rep-late">0</div><div class="stat-label">Tardanzas</div></div>
-      <div class="stat-cell" style="background:var(--red-bg)"><div class="stat-num" style="color:var(--red)" id="rep-absent">0</div><div class="stat-label">Ausentes</div></div>
-      <div class="stat-cell" style="background:var(--blue-bg)"><div class="stat-num" style="color:var(--blue)" id="rep-permission">0</div><div class="stat-label">Permisos</div></div>
+      <div class="stat-cell" style="background:var(--green-bg)"><div class="stat-num" style="color:var(--green)" id="rep-normal">0</div><div class="stat-label">Normal</div></div>
+      <div class="stat-cell" style="background:var(--yellow-bg)"><div class="stat-num" style="color:var(--yellow)" id="rep-doble">0</div><div class="stat-label">Doble</div></div>
+      <div class="stat-cell" style="background:var(--red-bg)"><div class="stat-num" style="color:var(--red)" id="rep-ausente">0</div><div class="stat-label">Ausentes</div></div>
     </div>
   </div>
   <div id="report-by-worker"></div>
-  <div id="report-days-list"></div>
   <button class="btn btn-excel" onclick="downloadExcel()" id="report-dl-btn">⬇ Descargar Excel</button>
 </div>
 
-<!-- MODAL DELETE -->
 <div class="modal-overlay" id="modal-delete" style="display:none">
   <div class="modal-box">
     <div class="modal-title">¿Eliminar trabajador?</div>
@@ -720,18 +693,9 @@ select{cursor:pointer;padding:10px;width:auto;margin-bottom:0}
 
 <div id="toast"></div>
 
-<!-- NAV -->
 <nav id="nav" style="display:none">
-  <button class="nav-btn" data-view="attendance" onclick="goTo('attendance')">
-    <span style="font-size:18px">📋</span>Asistencia
-  </button>
-  <button class="nav-btn" data-view="home" onclick="goTo('home')">
-    <span style="font-size:18px">🏠</span>Inicio
-  </button>
-  <button class="nav-btn jefa-only" data-view="workers" onclick="goTo('workers')" style="display:none">
-    <span style="font-size:18px">👷</span>Personal
-  </button>
-  <button class="nav-btn jefa-only" data-view="report" onclick="goTo('report')" style="display:none">
-    <span style="font-size:18px">📊</span>Reporte
-  </button>
+  <button class="nav-btn" data-view="attendance" onclick="goTo('attendance')"><span style="font-size:18px">📋</span>Asistencia</button>
+  <button class="nav-btn" data-view="home" onclick="goTo('home')"><span style="font-size:18px">🏠</span>Inicio</button>
+  <button class="nav-btn jefa-only" data-view="workers" onclick="goTo('workers')" style="display:none"><span style="font-size:18px">👷</span>Personal</button>
+  <button class="nav-btn jefa-only" data-view="report" onclick="goTo('report')" style="display:none"><span style="font-size:18px">📊</span>Reporte</button>
 </nav>
