@@ -141,6 +141,13 @@ function showToast(msg, type='ok') {
 
 // ── LOGIN ─────────────────────────────────────────────────────────────
 window.login = function(role) {
+  if (role === 'jefa') {
+    const pin = prompt('Ingresa el PIN de Jefa de Operaciones:');
+    if (pin !== '1209') {
+      alert('PIN incorrecto.');
+      return;
+    }
+  }
   userRole = role;
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('header').style.display = 'flex';
@@ -152,7 +159,7 @@ window.login = function(role) {
     document.querySelectorAll('.jefa-only').forEach(el => el.style.display = 'flex');
   } else {
     badge.className = 'role-badge role-capataz';
-    badge.textContent = 'CAPATAZ';
+    badge.textContent = 'SUPERVISOR';
     document.querySelectorAll('.jefa-only').forEach(el => el.style.display = 'none');
   }
   goTo('attendance');
@@ -572,7 +579,7 @@ select{cursor:pointer;padding:10px;width:auto;margin-bottom:0}
   <div class="login-title">CONTROL OBRA</div>
   <div class="login-sub">¿Quién eres?</div>
   <button class="login-btn login-jefa" onclick="login('jefa')">👷‍♀️ Jefa de Operaciones</button>
-  <button class="login-btn login-capataz" onclick="login('capataz')">🦺 Capataz / Encargado</button>
+  <button class="login-btn login-capataz" onclick="login('capataz')">🦺 Supervisor</button>
 </div>
 
 <div class="sync-bar hidden" id="sync-bar"></div>
